@@ -7,9 +7,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class STTService:
-    # Optimized for speed: "base.en" (English only, faster/smaller than "small" or "base")
-    # Using "base.en" is better for English than multilingual "base"
-    def __init__(self, model_size="base.en", device="cpu", compute_type="int8"):
+    # Upgraded to multilingual "base" to support both English and Kiswahili
+    def __init__(self, model_size="base", device="cpu", compute_type="int8"):
         logger.info(f"Loading Whisper model: {model_size} on {device}...")
         try:
             # Check if CUDA is available, otherwise force CPU
@@ -28,7 +27,7 @@ class STTService:
             logger.error(f"Failed to load Whisper model: {e}")
             self.model = None
 
-    def transcribe(self, audio_path: str) -> str:
+    def transcribe(self, audio_path: str, language: str = None) -> str:
         if not self.model:
             raise RuntimeError("Whisper model not initialized.")
         
@@ -36,12 +35,17 @@ class STTService:
             # Optimize for speed:
             # beam_size=1 (greedy decoding) - faster
             # vad_filter=True - ignores silence - faster
-            # language="en" - explicit
+            # language=None - auto-detect (supports Swahili 'sw')
+            kwargs = {
+                "beam_size": 1,
+                "vad_filter": True
+            }
+            if language:
+                kwargs["language"] = language
+                
             segments, info = self.model.transcribe(
                 audio_path, 
-                beam_size=1, 
-                language="en",
-                vad_filter=True
+                **kwargs
             )
             
             # segments is a generator, so we iterate

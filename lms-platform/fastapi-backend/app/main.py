@@ -14,6 +14,8 @@ import sentry_sdk
 
 # RAG Imports
 from langchain_community.vectorstores import FAISS
+from langchain_weaviate.vectorstores import WeaviateVectorStore
+import weaviate
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -114,13 +116,19 @@ async def lifespan(app: FastAPI):
             except Exception as ingest_error:
                 print(f"Critical Error: Failed to generate index: {ingest_error}")
         
-        if os.path.exists(index_path) and os.path.exists(index_file):
-            print(f"Loading FAISS index from {index_path}...")
-            # allow_dangerous_deserialization is needed for loading local files in newer langchain versions
-            vectorstore = FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
-            print("RAG system ready.")
-        else:
-            print("Error: RAG system could not be initialized. Index missing.")
+        print(f"Connecting to Weaviate at {settings.WEAVIATE_URL}...")
+        try:
+            weaviate_client = weaviate.connect_to_local(host="localhost", port=8080)
+            vectorstore = WeaviateVectorStore(weaviate_client, "CurriculumChunk", text_key="content", embedding=embeddings)
+            print("Connected to Weaviate. RAG system ready.")
+        except Exception as we_err:
+            print(f"Failed to connect to Weaviate: {we_err}. Falling back to FAISS.")
+            if os.path.exists(index_path) and os.path.exists(index_file):
+                print(f"Loading FAISS index from {index_path}...")
+                vectorstore = FAISS.load_local(index_path, embeddings, allow_dangerous_deserialization=True)
+                print("RAG system (FAISS fallback) ready.")
+            else:
+                print("Error: RAG system could not be initialized. FAISS Index missing and Weaviate unavailable.")
 
     except Exception as e:
         import traceback
@@ -156,6 +164,14 @@ async def lifespan(app: FastAPI):
                 temperature=0.7
             )
             print("LLM initialized successfully.")
+            
+            # Pass LLM to agents
+            from app.agents.alignment import alignment_agent
+            from app.agents.tutor import tutor_agent
+            from app.agents.parent_support import parent_support_agent
+            alignment_agent.llm = llm
+            tutor_agent.llm = llm
+            parent_support_agent.llm = llm
         else:
             print("Warning: LLM_API_KEY not found. Lesson generation will use mock responses.")
             
@@ -163,7 +179,11 @@ async def lifespan(app: FastAPI):
         print(f"Error initializing LLM: {e}")
 
     yield
+    
     # Clean up if needed
+    from app.services.knowledge_graph_neo4j import neo4j_service
+    if neo4j_service:
+        neo4j_service.close()
 
 app = FastAPI(title="LMS Platform Backend", version="0.1.0", lifespan=lifespan)
 
@@ -253,7 +273,7 @@ class TTSRequest(BaseModel):
 @app.post("/api/v1/tts")
 async def text_to_speech(request: TTSRequest):
     """
-    Generate audio from text using Chatterbox.
+    Generate audio from text using TTS.
     Returns a URL to the generated audio file.
     """
     try:
@@ -261,7 +281,7 @@ async def text_to_speech(request: TTSRequest):
         if not tts or not tts.model:
              raise HTTPException(status_code=503, detail="TTS service unavailable")
 
-        audio_path = tts.generate_audio(request.text, request.language)
+        audio_path = await tts.generate_audio(request.text, request.language)
         
         # Construct URL relative to current host
         # Ideally, we should use request.base_url, but for simplicity:
@@ -274,7 +294,7 @@ async def text_to_speech(request: TTSRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/v1/stt")
-async def speech_to_text(file: UploadFile = File(...)):
+async def speech_to_text(file: UploadFile = File(...), language: Optional[str] = Form(None)):
     """
     Transcribe audio file using Whisper.
     """
@@ -289,7 +309,7 @@ async def speech_to_text(file: UploadFile = File(...)):
             shutil.copyfileobj(file.file, buffer)
             
         try:
-            text = stt.transcribe(temp_filename)
+            text = stt.transcribe(temp_filename, language=language)
         finally:
             # Cleanup
             if os.path.exists(temp_filename):
@@ -298,6 +318,61 @@ async def speech_to_text(file: UploadFile = File(...)):
         return {"text": text}
     except Exception as e:
         print(f"STT Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Conversational Voice Tutor Endpoint ---
+from app.agents.tutor import tutor_agent
+
+class VoiceChatResponse(BaseModel):
+    transcript: str
+    reply_text: str
+    audio_url: str
+
+@app.post("/api/v1/chat/voice", response_model=VoiceChatResponse)
+async def voice_chat(
+    session_id: str = Form(...),
+    file: UploadFile = File(...),
+    language: str = Form("en"),
+    context: str = Form("")
+):
+    try:
+        # 1. STT
+        stt = get_stt_service()
+        if not stt or not stt.model:
+             raise HTTPException(status_code=503, detail="STT service unavailable")
+        
+        temp_filename = f"temp_chat_{file.filename}"
+        with open(temp_filename, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        try:
+            user_text = stt.transcribe(temp_filename, language=language if language != "auto" else None)
+        finally:
+            if os.path.exists(temp_filename):
+                os.remove(temp_filename)
+                
+        if not user_text.strip():
+            return {"transcript": "", "reply_text": "I didn't catch that.", "audio_url": ""}
+
+        # 2. LLM (Tutor Agent)
+        reply_text = await tutor_agent.get_response(session_id, user_text, context)
+
+        # 3. TTS
+        tts = get_tts_service()
+        audio_url = ""
+        if tts and tts.model:
+            audio_path = await tts.generate_audio(reply_text, language)
+            filename = os.path.basename(audio_path)
+            audio_url = f"/static/audio/{filename}"
+
+        return {
+            "transcript": user_text,
+            "reply_text": reply_text,
+            "audio_url": audio_url
+        }
+
+    except Exception as e:
+        print(f"Voice Chat Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- Timetable Endpoints ---
@@ -538,6 +613,15 @@ async def mark_notification_read(notification_id: UUID):
     if not success:
         raise HTTPException(status_code=404, detail="Notification not found")
     return {"status": "success"}
+
+@app.get("/api/v1/parent/tip")
+async def get_parent_tip(topic: str = "General", grade: str = "Grade 4"):
+    """
+    Generate a daily teaching tip for parents.
+    """
+    from app.agents.parent_support import parent_support_agent
+    tip = await parent_support_agent.generate_tip(topic, grade)
+    return {"tip": tip}
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

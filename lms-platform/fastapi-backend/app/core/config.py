@@ -2,12 +2,14 @@ from pydantic_settings import BaseSettings
 from pathlib import Path
 import os
 from typing import Optional, List
+from pydantic import ConfigDict
 
 # Define base directory relative to this file (app/core/config.py)
 # This points to lms-platform/fastapi-backend/
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 class Settings(BaseSettings):
+    model_config = ConfigDict(env_file=".env", extra="ignore")
     PROJECT_NAME: str = "LMS Platform"
     
     # CORS
@@ -46,8 +48,5 @@ class Settings(BaseSettings):
     # Monitoring
     SENTRY_DSN: Optional[str] = None
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore" # Ignore extra fields in .env
 
 settings = Settings()

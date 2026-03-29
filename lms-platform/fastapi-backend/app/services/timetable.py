@@ -135,31 +135,40 @@ class TimetableService:
 
         for day in range(1, 6): # 1=Mon, 5=Fri
             daily_subjects = schedule_matrix.get(day, [])
+            skip_next = False
             
             for i, subject_key in enumerate(daily_subjects):
+                if skip_next:
+                    skip_next = False
+                    continue
+                    
                 if i >= len(slots): break # Safety check
                 
                 slot = slots[i]
                 subject_id = subjects.get(subject_key)
                 
-                # Skip if subject not found (prevents crash on failed subject creation)
                 if not subject_id:
-                    print(f"Warning: Subject ID not found for key {subject_key}")
                     continue
 
                 activity_type = ActivityType.LESSON
-                if subject_key in ["sci", "agri", "arts", "pe"] and i == 4:
-                     # Afternoon slots are often practicals
+                end_time = slot["end"]
+                
+                # Check for Double Block Practicals (minimum 80 minutes)
+                if subject_key in ["sci", "agri", "arts", "pre_tech"] and i == 3:
+                     activity_type = ActivityType.PRACTICAL
+                     end_time = time(12, 10) # 10:50 to 12:10 (80 mins)
+                     skip_next = True # Skip slot 4 (index 4)
+                elif subject_key in ["sci", "agri", "arts", "pe"] and i == 4:
                      activity_type = ActivityType.PRACTICAL
 
                 entry = {
                     "timetable_id": timetable_id,
                     "day_of_week": day,
                     "start_time": slot["start"].strftime("%H:%M:%S"),
-                    "end_time": slot["end"].strftime("%H:%M:%S"),
+                    "end_time": end_time.strftime("%H:%M:%S"),
                     "subject_id": subject_id,
                     "activity_type": activity_type.value,
-                    "notes": f"{subject_key.upper()} Lesson"
+                    "notes": f"{subject_key.upper()} {'Practical' if activity_type == ActivityType.PRACTICAL else 'Lesson'}"
                 }
                 entries.append(entry)
 

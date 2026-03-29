@@ -20,8 +20,8 @@ sentence-transformers>=5.3.0
 faiss-cpu>=1.7.4
 supabase>=2.3.0
 redis>=5.0.0
-# weaviate-client>=4.5.0
-# neo4j>=5.17.0
+weaviate-client>=4.5.0
+neo4j>=5.17.0
 # Monitoring
 sentry-sdk>=1.40.0
 # Utilities
