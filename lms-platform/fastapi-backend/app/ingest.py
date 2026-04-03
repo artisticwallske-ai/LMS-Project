@@ -171,7 +171,11 @@ def ingest_curriculum(pdf_path: str = None, subject_name: str = "English", grade
         # Connect to Weaviate
         print(f"Connecting to Weaviate at {settings.WEAVIATE_URL}...")
         try:
-            client = weaviate.connect_to_local(host="localhost", port=8080)
+            from urllib.parse import urlparse
+            parsed_url = urlparse(settings.WEAVIATE_URL)
+            w_host = parsed_url.hostname or "localhost"
+            w_port = parsed_url.port or 8080
+            client = weaviate.connect_to_local(host=w_host, port=w_port)
             
             collection_name = "CurriculumChunk"
             if not client.collections.exists(collection_name):

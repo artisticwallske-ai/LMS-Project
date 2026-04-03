@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage
-from app.services.knowledge_graph import knowledge_graph_service
+from app.services.knowledge_graph_neo4j import neo4j_service as knowledge_graph_service
 
 class BaseAgent(ABC):
     """

@@ -118,7 +118,11 @@ async def lifespan(app: FastAPI):
         
         print(f"Connecting to Weaviate at {settings.WEAVIATE_URL}...")
         try:
-            weaviate_client = weaviate.connect_to_local(host="localhost", port=8080)
+            from urllib.parse import urlparse
+            parsed_url = urlparse(settings.WEAVIATE_URL)
+            w_host = parsed_url.hostname or "localhost"
+            w_port = parsed_url.port or 8080
+            weaviate_client = weaviate.connect_to_local(host=w_host, port=w_port)
             vectorstore = WeaviateVectorStore(weaviate_client, "CurriculumChunk", text_key="content", embedding=embeddings)
             print("Connected to Weaviate. RAG system ready.")
         except Exception as we_err:
